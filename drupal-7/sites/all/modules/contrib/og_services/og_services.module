@@ -1,0 +1,94 @@
+<?php
+
+/**
+ * Implementation of hook_services_resources.
+ */
+function og_services_services_resources() {
+  require_once("og_services.resource.inc");
+  $resources = array();
+  $resources += _og_services_resource_definition();
+  return $resources;
+}
+
+function og_services_user_access($service, $type, $resource, $data = NULL) {
+  global $user;
+
+  // Users can only join/leave groups for themselves, unless they are an admin.
+  if ($service == 'og' && $type == 'actions') {
+    $gid = arg(3);
+    $uid = arg(4);
+    if ($user->uid != $uid && !user_access('administer group')) {
+      $msg = 'User @uid is not allowed to @action group @gid';
+      return services_error(t($msg, array(
+        '@uid' => $uid,
+        '@action' => $resource,
+        '@gid' => $gid
+      )), 403);
+    }
+    if ($resource == 'join') {
+      return og_user_access('node', $gid, 'subscribe') ||
+        og_user_access('node', $gid, 'subscribe without approval');
+    }
+    else if ($resource == 'leave') {
+      return og_user_access('node', $gid, 'unsubscribe');
+    }
+  }
+
+  // Users can only get their own groups, unless they are an admin.
+  else if ($service == 'user' && $type == 'relationships' && $resource == 'groups')  {
+    if ($user->uid == 0) {
+      return services_error(t('Anonymous users have no groups.'), 403);
+    }
+    $uid = arg(2);
+    if ($user->uid != $uid && !user_access('administer group')) {
+      return services_error(t('Not allowed to load groups for user @uid.', array('@uid' => $uid)), 403);
+    }
+    return TRUE;
+  }
+
+  else if ($service == 'og_membership' && $type == 'entity') {
+    $id = NULL;
+    switch ($resource) {
+      case 'create':
+        if (og_services_membership_has_valid_params($data[0])) {
+          if (og_user_access($data[0]['group_type'], $data[0]['gid'], 'administer group')) {
+            return TRUE;
+          }
+        }
+        break;
+      case 'retrieve':
+      case 'update':
+      case 'delete':
+        $id = $data[0];
+        break;
+    }
+    if ($id) {
+      $membership = og_membership_load($id);
+      if (og_user_access($membership->group_type, $membership->gid, 'administer group')) {
+        return TRUE;
+      }
+    }
+
+  }
+
+  // If we made it this far, just fall back to the group admin permission.
+  return user_access('administer group');
+}
+
+function og_services_membership_has_valid_params($data) {
+  $requiredParams = array(
+    'entity_type',
+    'etid',
+    'group_type',
+    'gid',
+  );
+  foreach ($requiredParams as $param) {
+    if (!isset($data[$param])) {
+      return services_error(t('Missing required field: @param.', array('@param' => $param)), 406);
+    }
+  }
+  if (isset($data['type']) && !is_numeric($data['type'])) {
+    return services_error(t('The value for type must be an integer'), 406);
+  }
+  return TRUE;
+}
